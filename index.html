@@ -31,10 +31,15 @@
       <hotel-booking-engine data-primary="#008080" data-theme="light" data-hotel="grand-palms"></hotel-booking-engine>
     </main>
 
-    <script type="module">
+    <!-- <script type="module">
       // Preview without a backend:  /?mock
       if (new URLSearchParams(location.search).has('mock')) await import('/dev/mock-api.js');
       await import('/src/main.js');
+    </script> -->
+    <script type="module">
+      // Load mock API for any visitor landing on this preview page
+      await import('./dev/mock-api.js');
+      await import('./src/main.js');
     </script>
   </body>
 </html>
