@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { resolve } from 'path';
 
 export default defineConfig({
   test: {
@@ -8,15 +9,19 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     cssCodeSplit: false,
-    lib: {
-      entry: 'src/main.js',
-      name: 'HotelBookingEngine',
-      fileName: () => 'engine.js',
-      formats: ['iife'],
-    },
     rollupOptions: {
+      input: {
+        index: resolve(__dirname, 'index.html'),
+        engine: resolve(__dirname, 'src/main.js'),
+      },
       output: {
-        inlineDynamicImports: true,
+        entryFileNames: (chunkInfo) => {
+          if (chunkInfo.name === 'engine') return 'engine.js';
+          return 'assets/[name]-[hash].js';
+        },
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash].[ext]',
+        format: 'es',
       },
     },
   },
