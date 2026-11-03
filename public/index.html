@@ -32,8 +32,8 @@
     </main>
 
     <script>
-      // Production demo page (served at https://cdn.purebook.in/).
-      // Add ?mock to preview without a backend.
+      // Demo page served at https://cdn.purebook.in/
+      // Both  /  and  /?mock  open the engine with demo data (no backend needed).
       (function () {
         function load(src) {
           return new Promise(function (res, rej) {
@@ -42,8 +42,9 @@
             document.body.appendChild(el);
           });
         }
-        var useMock = new URLSearchParams(location.search).has('mock');
-        (useMock ? import('/mock-api.js') : Promise.resolve()).then(function () { return load('/engine.js'); });
+        import('/mock-api.js')
+          .catch(function (e) { console.warn('Demo data failed to load', e); })
+          .then(function () { return load('/engine.js'); });
       })();
     </script>
   </body>
