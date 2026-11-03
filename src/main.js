@@ -29,6 +29,7 @@ import {
 import { renderPropertyGuide } from "./components/PropertyGuide.js";
 import { analytics } from "./utils/analytics.js";
 import styles from "./styles/shadow-theme.css?inline";
+import { BRAND_MARK, BRAND_NAME, BRAND_URL } from "./utils/brand.js";
 
 const FONT_HREF =
   "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap";
@@ -284,6 +285,9 @@ class HotelBookingEngine extends HTMLElement {
             <li data-step="CONFIRMED"><span class="hbe-step-dot">3</span><span class="hbe-step-label">Confirmed</span></li>
           </ol>
           <div class="hbe-body" id="hbe-body"></div>
+          <footer class="hbe-foot">
+            <a class="hbe-foot-link" href="${BRAND_URL}" target="_blank" rel="noopener noreferrer" aria-label="Powered by ${BRAND_NAME}">${BRAND_MARK}<span>Powered by <b>${BRAND_NAME}</b></span></a>
+          </footer>
         </div>
       </div>
     `;
