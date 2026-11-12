@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PureBook Secure Checkout</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f8fafc;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        color: #0f172a;
+      }
+      .card {
+        max-width: 340px;
+        width: 90%;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 24px;
+        text-align: center;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      }
+      .spinner {
+        width: 32px;
+        height: 32px;
+        margin: 0 auto 12px;
+        border: 2.5px solid #0f172a;
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      h1 {
+        font-size: 14px;
+        font-weight: 700;
+        margin: 0 0 6px;
+      }
+      p {
+        font-size: 12px;
+        color: #64748b;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="spinner"></div>
+      <h1>PureBook Secure Checkout</h1>
+      <p id="status">Initializing secure payment...</p>
+    </div>
+
+    <script>
+      (function () {
+        const statusEl = document.getElementById('status');
+        const params = new URLSearchParams(window.location.search);
+
+        const keyId = params.get('keyId');
+        const orderId = params.get('orderId');
+        const amount = Number(params.get('amount') || 0);
+        const hotelName = params.get('hotelName') || 'PureBook';
+        const bookingCode = params.get('bookingCode') || '';
+        const guestName = params.get('guestName') || '';
+        const guestEmail = params.get('guestEmail') || '';
+        const guestPhone = params.get('guestPhone') || '';
+        const themeColor = params.get('themeColor') || '#0f766e';
+        const parentOrigin = params.get('parentOrigin') || '*';
+        const returnUrl = params.get('returnUrl');
+
+        function notifyParent(type, extra) {
+          extra = extra || {};
+          if (window.opener && !window.opener.closed) {
+            window.opener.postMessage(
+              Object.assign({ source: 'PUREBOOK_PAY_BRIDGE', type: type }, extra),
+              parentOrigin
+            );
+            window.close();
+          } else if (returnUrl) {
+            const back = new URL(returnUrl);
+            back.searchParams.set('pb_pay_status', type);
+            if (extra.payload && extra.payload.razorpay_payment_id) {
+              back.searchParams.set('razorpay_payment_id', extra.payload.razorpay_payment_id);
+              back.searchParams.set('razorpay_order_id', extra.payload.razorpay_order_id);
+              back.searchParams.set('razorpay_signature', extra.payload.razorpay_signature);
+            }
+            window.location.href = back.toString();
+          }
+        }
+
+        if (!keyId || !orderId || !amount) {
+          statusEl.textContent = 'Invalid payment session parameters.';
+          return;
+        }
+
+        const script = document.createElement('script');
+        script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+        script.async = true;
+
+        script.onload = function () {
+          statusEl.textContent = 'Complete your payment in the Razorpay window...';
+
+          const rzp = new window.Razorpay({
+            key: keyId,
+            amount: amount,
+            currency: 'INR',
+            name: hotelName,
+            description: bookingCode ? 'Booking #' + bookingCode : 'Booking Fee',
+            order_id: orderId,
+            prefill: {
+              name: guestName,
+              email: guestEmail,
+              contact: guestPhone,
+            },
+            theme: {
+              color: themeColor,
+            },
+            handler: function (response) {
+              statusEl.textContent = 'Payment successful! Returning to booking...';
+              notifyParent('PAYMENT_SUCCESS', { payload: response });
+            },
+            modal: {
+              ondismiss: function () {
+                statusEl.textContent = 'Payment cancelled.';
+                notifyParent('PAYMENT_DISMISSED');
+              },
+            },
+          });
+
+          rzp.on('payment.failed', function (resp) {
+            statusEl.textContent = 'Payment failed.';
+            notifyParent('PAYMENT_FAILED', {
+              error: (resp && resp.error && resp.error.description) || 'Payment failed',
+            });
+          });
+
+          rzp.open();
+        };
+
+        script.onerror = function () {
+          statusEl.textContent = 'Failed to load Razorpay checkout. Please check your connection.';
+          notifyParent('PAYMENT_FAILED', { error: 'Failed to load payment SDK' });
+        };
+
+        document.body.appendChild(script);
+      })();
+    </script>
+  </body>
+</html>

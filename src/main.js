@@ -3,6 +3,7 @@ import {
   fetchAvailability,
   createBookingHold,
   validatePromoCode,
+  releaseBookingHold,
 } from "./utils/api.js";
 import {
   esc,
@@ -156,8 +157,8 @@ class HotelBookingEngine extends HTMLElement {
     this.injectStyles();
     this.render();
     this.applyBranding();
-    loadRazorpayScript();
     await this.initHotel();
+    await this.handleBridgeRedirectReturn();
   }
 
   disconnectedCallback() {
@@ -190,6 +191,10 @@ class HotelBookingEngine extends HTMLElement {
         this.state.turnstileSiteKey = res.data.turnstileSiteKey;
       }
 
+      if (res.data?.paymentConfig?.mode === "HOTEL_GATEWAY") {
+        loadRazorpayScript();
+      }
+
       // Initialize Tracking Pixels (GA4 / Meta Pixel / GTM)
       if (res.data?.integrations) {
         analytics.init(res.data.integrations);
@@ -211,6 +216,64 @@ class HotelBookingEngine extends HTMLElement {
     }
 
     await this.searchRooms();
+  }
+
+  async handleBridgeRedirectReturn() {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const payStatus = url.searchParams.get("pb_pay_status");
+    if (!payStatus) return;
+
+    let pending = null;
+    try {
+      pending = JSON.parse(
+        sessionStorage.getItem("pb_bridge_pending") || "null",
+      );
+      sessionStorage.removeItem("pb_bridge_pending");
+    } catch {
+      pending = null;
+    }
+
+    [
+      "pb_pay_status",
+      "razorpay_payment_id",
+      "razorpay_order_id",
+      "razorpay_signature",
+    ].forEach((k) => url.searchParams.delete(k));
+    window.history.replaceState({}, "", url.toString());
+
+    if (!pending || pending.hotelSlug !== this.state.hotelSlug) return;
+
+    if (payStatus === "PAYMENT_SUCCESS") {
+      this.state.confirmedBookingCode = pending.bookingCode;
+      this.state.paymentSplit = pending.paymentSplit || null;
+      this.state.selectedBooking = pending.selectedBooking || null;
+      this.state.checkIn = pending.checkIn || this.state.checkIn;
+      this.state.checkOut = pending.checkOut || this.state.checkOut;
+
+      analytics.trackPurchase({
+        bookingCode: pending.bookingCode,
+        value: pending.amount || 0,
+        roomTypeId: pending.selectedBooking?.roomTypeId || null,
+        roomName: pending.selectedBooking?.name || "Direct Booking",
+      });
+
+      this.state.step = "VERIFYING";
+      this.openModal();
+    } else {
+      if (pending.bookingId || pending.bookingCode) {
+        await releaseBookingHold({
+          slug: this.state.hotelSlug,
+          bookingId: pending.bookingId,
+          bookingCode: pending.bookingCode,
+        }).catch(() => {});
+      }
+      this.state.error =
+        payStatus === "PAYMENT_FAILED"
+          ? "Payment could not be completed. Please try again."
+          : "Payment was cancelled.";
+      this.openModal();
+    }
   }
 
   get nights() {
@@ -603,7 +666,7 @@ class HotelBookingEngine extends HTMLElement {
     const aside = document.createElement("div");
     aside.className = "hbe-checkout-aside";
 
-    // ── Rate Plans Selection (Issue 1 & Feature Support) ──
+    // ── Rate Plans Selection ──
     const activeRatePlans = (meta?.ratePlans || []).filter(
       (rp) => rp.isActive !== false,
     );
@@ -1064,17 +1127,23 @@ class HotelBookingEngine extends HTMLElement {
         );
       }
 
-      const { bookingId, razorpayOrderId, razorpayKeyId, amount, bookingCode } =
-        holdRes.data;
+      const {
+        bookingId,
+        razorpayOrderId,
+        razorpayKeyId,
+        amount,
+        bookingCode,
+        payAtHotel,
+      } = holdRes.data;
 
       // Remember the split so the confirmation screen can show what is due at the hotel
-      this.state.paymentSplit = holdRes.data.payAtHotel
+      this.state.paymentSplit = payAtHotel
         ? { paidNow: amount, dueAtHotel: holdRes.data.amountDueAtHotel || 0 }
         : null;
 
       this.state.activeBookingId = bookingId;
 
-      if (!window.Razorpay) {
+      if (!payAtHotel && !window.Razorpay) {
         setBusy(true, "Loading payment gateway…");
         const ok = await loadRazorpayScript();
         if (!ok || !window.Razorpay) {
@@ -1085,7 +1154,31 @@ class HotelBookingEngine extends HTMLElement {
         }
       }
 
+      if (payAtHotel) {
+        try {
+          sessionStorage.setItem(
+            "pb_bridge_pending",
+            JSON.stringify({
+              hotelSlug: this.state.hotelSlug,
+              bookingId,
+              bookingCode,
+              amount,
+              paymentSplit: this.state.paymentSplit,
+              selectedBooking: booking,
+              checkIn: this.state.checkIn,
+              checkOut: this.state.checkOut,
+            }),
+          );
+        } catch {
+          /* ignore storage restrictions */
+        }
+      }
+
       setBusy(true, "Waiting for payment…");
+
+      const primaryAttr = this.getAttribute("data-primary");
+      const themeColor =
+        primaryAttr && HEX.test(primaryAttr) ? primaryAttr : "#0f766e";
 
       openRazorpayCheckout({
         hotelSlug: this.state.hotelSlug,
@@ -1094,9 +1187,14 @@ class HotelBookingEngine extends HTMLElement {
         keyId: razorpayKeyId,
         orderId: razorpayOrderId,
         amount,
+        payAtHotel: Boolean(payAtHotel),
+        themeColor,
         hotelName: this.state.hotelMeta?.name || "Direct Booking",
         guest: { ...guest, phone: guest.phoneE164 || guest.phone },
         onSuccess: () => {
+          try {
+            sessionStorage.removeItem("pb_bridge_pending");
+          } catch {}
           this._paying = false;
           this.state.confirmedBookingCode = bookingCode;
 
@@ -1112,11 +1210,17 @@ class HotelBookingEngine extends HTMLElement {
           this.updateView();
         },
         onDismiss: () => {
+          try {
+            sessionStorage.removeItem("pb_bridge_pending");
+          } catch {}
           this.state.activeBookingId = null;
           this.guestForm?.resetTurnstile?.();
           setBusy(false);
         },
         onFailure: (err) => {
+          try {
+            sessionStorage.removeItem("pb_bridge_pending");
+          } catch {}
           this.state.activeBookingId = null;
           if (window.Sentry) {
             window.Sentry.captureException(err, {
