@@ -2,8 +2,11 @@
  * PropertyGuide.js
  * Trust-building guide for the booking modal, in this order:
  * Map → Reasons → Amenities → Languages → Key Facts → Cancellation → FAQs → Rules → Announcement
+ *
+ * Everything shown here comes from the hotel's own settings. Nothing is invented:
+ * a fact the hotel left blank is hidden rather than replaced with a made-up default.
  */
-import { esc, plural } from "../utils/format.js";
+import { esc, plural, fmtClock, tierLabel } from "../utils/format.js";
 import { icon } from "../utils/icons.js";
 
 // Only allow https map embeds (meta comes from an API)
@@ -16,12 +19,12 @@ const safeUrl = (u) => {
   }
 };
 
-const distance = (v, fallback) =>
-  v == null || v === ""
-    ? fallback
-    : typeof v === "number"
-      ? `${v} km`
-      : String(v);
+// Returns "" when the hotel left the field empty, so the row can be hidden
+const distance = (v) => {
+  if (v == null) return "";
+  if (typeof v === "number") return Number.isFinite(v) ? `${v} km` : "";
+  return String(v).trim();
+};
 
 const cardHeader = (ico, title) =>
   `<div class="hbe-guide-header"><span class="hbe-guide-icon">${ico}</span>${title}</div>`;
@@ -50,12 +53,18 @@ const accordionCard = (ico, title, bodyHtml) => `
 const refundClass = (pct) =>
   pct >= 100 ? "is-full" : pct > 0 ? "is-partial" : "is-none";
 
+// Same rule as the server and the checkout step: anything except HOTEL_GATEWAY is pay-at-hotel
+const isPayAtHotel = (meta) => meta?.paymentConfig?.mode !== "HOTEL_GATEWAY";
+
 export function renderPropertyGuide(container, meta) {
   if (!meta) return;
 
   const guideBox = document.createElement("section");
   guideBox.className = "hbe-guide-wrapper";
   guideBox.setAttribute("aria-label", "Property guide");
+
+  const checkInText = fmtClock(meta.checkInTime, "12:00 PM");
+  const checkOutText = fmtClock(meta.checkOutTime, "11:00 AM");
 
   // 1. Map & Landmark
   const mapUrl = safeUrl(meta.address?.mapEmbedUrl);
@@ -122,20 +131,27 @@ export function renderPropertyGuide(container, meta) {
 
   // 5. Key Property Facts
   const facts = meta.helpfulFacts || {};
+
+  // 0 is a real answer ("no restaurant"), so only fall back when the value is missing
+  const restaurantCount = Number(facts.numberOfRestaurants);
+  const restaurantText = !Number.isFinite(restaurantCount)
+    ? ""
+    : restaurantCount === 0
+      ? "Not available"
+      : plural(restaurantCount, "restaurant");
+
   const factCells = [
-    [
-      "Check-in / Check-out",
-      `${meta.checkInTime || "12:00 PM"} / ${meta.checkOutTime || "11:00 AM"}`,
-    ],
-    ["In-house dining", plural(facts.numberOfRestaurants || 1, "restaurant")],
-    ["Airport distance", distance(facts.airportDistanceKm, "15 km")],
-    ["Railway station", distance(facts.railwayStationDistanceKm, "5 km")],
+    ["Check-in / Check-out", `${checkInText} / ${checkOutText}`],
+    ["In-house dining", restaurantText],
+    ["Airport distance", distance(facts.airportDistanceKm)],
+    ["Railway station", distance(facts.railwayStationDistanceKm)],
     [
       "Couple friendly",
-      facts.coupleFriendly ? "Yes (18+ with ID)" : "Family only",
+      facts.coupleFriendly ? "Yes (18+ with ID)" : "No",
     ],
     ["Pets allowed", facts.petFriendly ? "Yes" : "No"],
-  ];
+  ].filter(([, val]) => val !== "");
+
   const factsHtml = `
     <div class="hbe-guide-card hbe-facts-card hbe-span-all">
       ${cardHeader(icon("list", 18), "Key Property Facts")}
@@ -154,9 +170,38 @@ export function renderPropertyGuide(container, meta) {
 
   // 6. Cancellation & Refund Policy
   const policy = meta.cancellationPolicy;
+  const cutoff = Number(policy?.cutoffHours);
+  const cutoffText =
+    Number.isFinite(cutoff) && cutoff > 0
+      ? `Online cancellation closes ${cutoff} ${cutoff === 1 ? "hour" : "hours"} before check-in.`
+      : "";
   let cancellationHtml;
 
-  if (policy?.enabled && policy.tiers?.length > 0) {
+  if (isPayAtHotel(meta)) {
+    // Pay-at-hotel uses a fixed rule on the server; the hotel's day-wise tiers do not apply
+    cancellationHtml = `
+      <div class="hbe-guide-card hbe-span-all">
+        ${cardHeader(icon("shield", 18), "Cancellation &amp; Refund Policy")}
+        <ul class="hbe-cancel-list">
+          <li class="hbe-cancel-row">
+            <span class="hbe-cancel-label">Booking fee paid online</span>
+            <span class="hbe-refund-badge is-none">Non-refundable</span>
+          </li>
+          <li class="hbe-cancel-row">
+            <span class="hbe-cancel-label">If you cancel in time</span>
+            <span class="hbe-refund-badge is-partial">Nothing more to pay</span>
+          </li>
+          <li class="hbe-cancel-row">
+            <span class="hbe-cancel-label">If the hotel cancels</span>
+            <span class="hbe-refund-badge is-full">Fee refunded in full</span>
+          </li>
+        </ul>
+        <p class="hbe-landmark-text hbe-cancel-note">
+          * The rest of the amount is paid at the hotel on arrival.${cutoffText ? " " + esc(cutoffText) : ""}
+        </p>
+      </div>
+    `;
+  } else if (policy?.enabled && policy.tiers?.length > 0) {
     const tiers = [...policy.tiers].sort(
       (a, b) => b.daysBeforeCheckIn - a.daysBeforeCheckIn,
     );
@@ -165,22 +210,17 @@ export function renderPropertyGuide(container, meta) {
         ${cardHeader(icon("shield", 18), "Cancellation &amp; Refund Policy")}
         <ul class="hbe-cancel-list">
           ${tiers
-            .map((t) => {
-              const days = Number(t.daysBeforeCheckIn) || 0;
+            .map((t, i) => {
               const pct = Number(t.refundPercent) || 0;
-              const label =
-                days === 0
-                  ? "Within 48 hours of check-in"
-                  : `Up to <strong>${days} ${days === 1 ? "day" : "days"}</strong> before check-in`;
               return `<li class="hbe-cancel-row">
-                        <span class="hbe-cancel-label">${label}</span>
+                        <span class="hbe-cancel-label">${tierLabel(tiers, i)}</span>
                         <span class="hbe-refund-badge ${refundClass(pct)}">${pct}% refund</span>
                       </li>`;
             })
             .join("")}
         </ul>
         <p class="hbe-landmark-text hbe-cancel-note">
-          * Deadlines are calculated from the hotel's standard ${esc(meta.checkInTime || "12:00 PM")} check-in time.
+          * Deadlines are calculated from the hotel's standard ${esc(checkInText)} check-in time.${cutoffText ? " " + esc(cutoffText) : ""}
         </p>
       </div>
     `;

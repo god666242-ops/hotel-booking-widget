@@ -1,4 +1,4 @@
-import { esc } from '../utils/format.js';
+import { esc, fmtClock, tierLabel } from '../utils/format.js';
 import { icon } from '../utils/icons.js';
 
 /**
@@ -17,6 +17,7 @@ export function renderPolicyNotice(
 ) {
   if (!container) return;
 
+  const checkInText = fmtClock(checkInTime, '12:00 PM');
   const hours = Number(cutoffHours);
   const cutoffText =
     Number.isFinite(hours) && hours > 0
@@ -48,14 +49,10 @@ export function renderPolicyNotice(
 
   const tiers = [...cancellationPolicy.tiers].sort((a, b) => b.daysBeforeCheckIn - a.daysBeforeCheckIn);
   const rows = tiers
-    .map((t) => {
-      const days = Number(t.daysBeforeCheckIn) || 0;
+    .map((t, i) => {
       const pct = Number(t.refundPercent) || 0;
       const cls = pct >= 100 ? 'is-full' : pct > 0 ? 'is-partial' : 'is-none';
-      const label = days === 0
-        ? 'Within 48 hours of check-in'
-        : `Up to <strong>${days} ${days === 1 ? 'day' : 'days'}</strong> before check-in`;
-      return `<li class="hbe-cancel-row"><span class="hbe-cancel-label">${label}</span><span class="hbe-refund-badge ${cls}">${pct}% refund</span></li>`;
+      return `<li class="hbe-cancel-row"><span class="hbe-cancel-label">${tierLabel(tiers, i)}</span><span class="hbe-refund-badge ${cls}">${pct}% refund</span></li>`;
     })
     .join('');
 
@@ -63,6 +60,6 @@ export function renderPolicyNotice(
     <div class="hbe-policy-card">
       <div class="hbe-policy-header">${icon('shield', 18)}<span class="hbe-policy-title">Cancellation &amp; refund policy</span></div>
       <ul class="hbe-cancel-list">${rows}</ul>
-      <p class="hbe-policy-footnote">Deadlines are counted from the standard ${esc(checkInTime)} check-in time.${cutoffText ? ' ' + esc(cutoffText) : ''}</p>
+      <p class="hbe-policy-footnote">Deadlines are counted from the standard ${esc(checkInText)} check-in time.${cutoffText ? ' ' + esc(cutoffText) : ''}</p>
     </div>`;
 }
